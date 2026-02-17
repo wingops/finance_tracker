@@ -1,0 +1,25 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.env/
+
+# Environment variables
+.env
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Data files
+data/raw/
+data/processed/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
