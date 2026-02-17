@@ -4,6 +4,7 @@ import uuid
 import hashlib
 import re
 from pathlib import Path
+from decimal import Decimal, ROUND_HALF_UP
 
 DB_PATH = "finance.sqlite"
 
@@ -29,16 +30,22 @@ CREATE TABLE IF NOT EXISTS categories (
 
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
+
   txn_date TEXT NOT NULL,
   posted_date TEXT,
-  amount REAL NOT NULL,
+
+  amount_cents INTEGER NOT NULL,          -- cents-based
   currency TEXT NOT NULL DEFAULT 'USD',
+
   description_raw TEXT NOT NULL,
   description_clean TEXT NOT NULL,
+
   account_id TEXT NOT NULL,
   category_id INTEGER,
+
   dedupe_hash TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
   FOREIGN KEY(account_id) REFERENCES accounts(account_id),
   FOREIGN KEY(category_id) REFERENCES categories(category_id)
 );
@@ -46,6 +53,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date);
 CREATE INDEX IF NOT EXISTS idx_account_id ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_category_id ON transactions(category_id);
+
 """
 
 
@@ -59,6 +67,17 @@ def ensure_db(db_path: str = DB_PATH) -> sqlite3.Connection:
 # ----------------------------
 # 2) Normalization helpers
 # ----------------------------
+def to_cents(x) -> int:
+    """
+    Convert dollars to integer cents exactly.
+    Handles floats/strings; rounds half up to nearest cent.
+    """
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        raise ValueError("Amount is missing")
+
+    d = Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return int(d * 100)
+
 NOISE_PHRASES = [
     "card purchase", "pos", "purchase", "debit", "credit", "us"
 ]
@@ -75,8 +94,8 @@ def clean_description(desc: str) -> str:
     return s
 
 
-def compute_dedupe_hash(txn_date: str, amount: float, desc_clean: str, account_id: str) -> str:
-    key = f"{txn_date}|{amount:.2f}|{desc_clean}|{account_id}"
+def compute_dedupe_hash(txn_date: str, amount_cents: int, desc_clean: str, account_id: str) -> str:
+    key = f"{txn_date}|{amount_cents}|{desc_clean}|{account_id}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -97,7 +116,7 @@ def upsert_account(con: sqlite3.Connection, account_id: str, institution: str, n
 # ----------------------------
 # 3) Importers for your 2 sources
 # ----------------------------
-def ingest_source1_checking(con: sqlite3.Connection, csv_path: str, institution: str = "Chase"):
+def ingest_source1_checking(con: sqlite3.Connection, csv_path: str, institution: str = "Santander"):
     """
     Source 1 columns (example):
     Date, ABA Num, Currency, Account Num, Account Name, Description, BAI Code, Amount, Serial Num, Ref Num
@@ -123,7 +142,7 @@ def ingest_source1_checking(con: sqlite3.Connection, csv_path: str, institution:
     insert_transactions(con, out)
 
 
-def ingest_source2_credit(con: sqlite3.Connection, csv_path: str, institution: str = "Chase", card_name: str = "Chase Visa"):
+def ingest_source2_credit(con: sqlite3.Connection, csv_path: str, institution: str = "Capital One", card_name: str = "Chase Visa"):
     """
     Source 2 columns (example):
     Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit
@@ -164,21 +183,21 @@ def insert_transactions(con: sqlite3.Connection, txns: pd.DataFrame):
     for row in txns.itertuples(index=False):
         txn_date = row.txn_date
         posted_date = row.posted_date if pd.notna(row.posted_date) else None
-        amount = float(row.amount)
+        amount_cents = to_cents(row.amount)
         currency = str(row.currency) if pd.notna(row.currency) else "USD"
         desc_raw = str(row.description_raw)
         desc_clean = str(row.description_clean)
         account_id = str(row.account_id)
 
-        d_hash = compute_dedupe_hash(txn_date, amount, desc_clean, account_id)
+        d_hash = compute_dedupe_hash(txn_date, amount_cents, desc_clean, account_id)
 
         try:
             con.execute(
                 """
                 INSERT INTO transactions(
-                  id, txn_date, posted_date, amount, currency,
-                  description_raw, description_clean,
-                  account_id, category_id, dedupe_hash
+                id, txn_date, posted_date, amount_cents, currency,
+                description_raw, description_clean,
+                account_id, category_id, dedupe_hash
                 )
                 VALUES(?,?,?,?,?,?,?,?,?,?)
                 """,
@@ -186,7 +205,7 @@ def insert_transactions(con: sqlite3.Connection, txns: pd.DataFrame):
                     str(uuid.uuid4()),
                     txn_date,
                     posted_date,
-                    amount,
+                    amount_cents,
                     currency,
                     desc_raw,
                     desc_clean,
