@@ -121,7 +121,7 @@ def ingest_source1_checking(con: sqlite3.Connection, csv_path: str, institution:
     Source 1 columns (example):
     Date, ABA Num, Currency, Account Num, Account Name, Description, BAI Code, Amount, Serial Num, Ref Num
     """
-    df = pd.read_csv(csv_path, sep=None, engine="python")  # handles tab or comma
+    df = pd.read_csv(csv_path, sep=None, engine="python", skiprows=4)  # handles tab or comma
     df.columns = [c.strip() for c in df.columns]
 
     # Create account from the first row (assuming one account per file)
